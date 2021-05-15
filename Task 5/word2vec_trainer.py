@@ -5,7 +5,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 import torchvision
-
+import numpy as np
 import matplotlib.pyplot as plt
 
 class TrainProcessPlotter:
@@ -52,19 +52,23 @@ class Trainer:
     
     @staticmethod
     def binary_accuracy(predictions, labels):
-        indices = torch.argmax(predictions, dim=1)
+        # indices = torch.argmax(predictions, dim=1)
+        _, indices = torch.max(predictions, 1)
         correct_samples = torch.sum(indices == 0)
         total_samples = len(labels)
         
         return float(correct_samples) / total_samples
     
-    def train(self, opt, loss_fn, device, metric_fn=accuracy, scheduler=None, epochs=15):
+    def train(self, opt, loss_fn, device, metric_fn, scheduler=None, epochs=15):
         self.model.to(device)
         train_loss, train_metric = [], []
 
         for epoch in range(1, epochs + 1):
             self.model.train()
-            
+            rand = np.random.uniform(5, 10)
+            self.dataset.generate_dataset() # Regenerate dataset every epoch
+            self.train_loader = torch.utils.data.DataLoader(self.dataset, batch_size=self.batchsize)
+
             print(f'[ Training.. {epoch}/{epochs} ]')
             train_epoch_loss, train_epoch_metric = self.__epoch_step(opt=opt, 
                                                                      loss_fn=loss_fn, 
@@ -83,9 +87,9 @@ class Trainer:
     def __epoch_step(self, loss_fn, metric_fn, device, opt, loader):
         
         epoch_loss = 0
-        predictions = []
-        labels = []
 
+        correct_samples = 0
+        total_samples = 0
         if not self.neg_samp:
             for i_step, (input_vector, output_index) in enumerate(loader):
                     x, y = input_vector.to(device), output_index.to(device)
@@ -97,9 +101,11 @@ class Trainer:
                         loss_value.backward()
                         opt.step()
                     
-                    predictions.append(prediction)
-                    labels.append(y)
-                    
+
+                    _, indices = torch.max(prediction, 1)
+                    correct_samples += torch.sum(indices == y)
+                    total_samples += y.shape[0]
+
                     epoch_loss += loss_value
         else:
             for i_step, (input_vector, output_indices, output_target) in enumerate(loader):
@@ -107,25 +113,21 @@ class Trainer:
                         h = output_indices.to(device)
                         y = output_target.to(device)
                         prediction = self.model(x, h)
-                        loss_value = loss_fn(prediction, y.type_as(prediction))
+                        loss_value = loss_fn(prediction.to(device), y.type_as(prediction))
                         
                         if opt is not None:
                             opt.zero_grad()
                             loss_value.backward()
                             opt.step()
                         
-                        predictions.append(prediction)
-                        labels.append(y.type_as(prediction))
+                        _, indices = torch.max(prediction, 1)
+                        correct_samples += torch.sum(indices == 0)
+                        total_samples += y.shape[0]
                         
                         epoch_loss += loss_value
-        num_batches = i_step + 1
-        
-        predictions, labels = torch.cat(predictions), torch.cat(labels)
-        epoch_loss /= num_batches
-        epoch_metric = metric_fn(predictions, labels)
 
-        self.dataset.generate_dataset() # Regenerate dataset every epoch
-        self.train_loader = torch.utils.data.DataLoader(self.dataset, batch_size=self.batchsize)
+        epoch_loss /= i_step
+        epoch_metric = float(correct_samples) / total_samples
         
         return epoch_loss, epoch_metric
 
